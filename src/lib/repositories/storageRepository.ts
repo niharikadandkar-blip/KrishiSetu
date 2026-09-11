@@ -153,16 +153,20 @@ export const storageRepository = {
 
     // 2. Atomic Database Transaction + Row Locking Strategy
     return db.$transaction(async (tx) => {
-      // Row lock on StorageFacility
-      const facilityRows = await tx.$queryRaw<Array<{ id: string; totalCapacity: number; capacityUnit: string; pricePerUnitPerDay: number }>>`
-        SELECT id, totalCapacity, capacityUnit, pricePerUnitPerDay FROM "StorageFacility" WHERE id = ${input.facilityId}
-      `;
+      // Fetch StorageFacility details inside transaction
+      const facility = await tx.storageFacility.findUnique({
+        where: { id: input.facilityId },
+        select: {
+          id: true,
+          totalCapacity: true,
+          capacityUnit: true,
+          pricePerUnitPerDay: true,
+        },
+      });
 
-      if (!facilityRows || facilityRows.length === 0) {
+      if (!facility) {
         throw new Error('FACILITY_NOT_FOUND: Target storage facility record not found');
       }
-
-      const facility = facilityRows[0];
       const requestUnit = input.unit || 'Quintal';
 
       // 3. Normalize Quantity
