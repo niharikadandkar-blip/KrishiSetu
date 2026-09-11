@@ -1,0 +1,722 @@
+// KrishiSetu Database Schema
+// Production Target: PostgreSQL + PostGIS
+// Temporary Local Dev Provider: SQLite
+// NOTE: All data access code is decoupled through repository patterns (UserRepository, LotRepository, etc.)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String                @id @default(uuid())
+  mobile           String                @unique
+  name             String
+  role             String                @default("FARMER") // FARMER, BUYER, ADMIN
+  language         String                @default("mr")
+  mobileVerified   Boolean               @default(false)
+  profileVerified  Boolean               @default(false)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  location             LocationData?
+  farmerProfile        FarmerProfile?
+  buyerProfile         BuyerProfile?
+  verificationRequests VerificationRequest[]
+  sessions             SessionToken[]
+  
+  // Phase 2, 3 & 5 Marketplace Relations
+  lots                 Lot[]                 @relation("FarmerLots")
+  prebookings          HarvestPrebooking[]   @relation("BuyerPrebookings")
+  rfqs                 RFQAndInquiry[]       @relation("BuyerRFQs")
+  bids                 OfferAndBid[]         @relation("UserBids")
+  follows              FollowAndAlert[]      @relation("UserFollower")
+  followers            FollowAndAlert[]      @relation("FarmerFollowed")
+  savedListings        SavedListing[]
+  farmerOrders         Order[]               @relation("FarmerOrders")
+  buyerOrders          Order[]               @relation("BuyerOrders")
+
+  // Phase 6 Transportation & Storage Relations
+  providerProfile      ProviderProfile?
+  transportRequests    TransportRequest[]    @relation("UserTransportRequests")
+  storageRequests      StorageRequest[]      @relation("UserStorageRequests")
+
+  // Phase 9 Notification & Alert Relations
+  notifications        Notification[]
+  notificationPreference NotificationPreference?
+  marketAlertConfigs   MarketAlertConfig[]
+
+  // Phase 10 Trust, Reputation & Safety Relations
+  reviewsGiven         TransactionReview[]   @relation("ReviewsGiven")
+  reviewsReceived      TransactionReview[]   @relation("ReviewsReceived")
+  reportsFiled         Report[]              @relation("ReportsFiled")
+  reportsAgainst       Report[]              @relation("ReportsAgainstUser")
+  moderationNotes      ModerationNote[]      @relation("ModerationNotesCreated")
+}
+
+model FarmerProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mainCrop      String?
+  otherCrops    String?
+  farmingStatus String?  // e.g. Smallholder, Medium, Commercial
+  farmArea      Float?   // Area size in acres/hectares
+  farmAreaUnit  String?  @default("Acres")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model BuyerProfile {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName     String?
+  businessType     String?  @default("TRADER") // TRADER, WHOLESALER, PROCESSOR, RETAILER, FPO, EXPORTER, OTHER
+  cropsPurchased   String?  // Comma-separated crop names or JSON string
+  businessLocation String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model LocationData {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  state            String
+  district         String
+  taluka           String?
+  village          String?
+  latitude         Float?
+  longitude        Float?
+  formattedAddress String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model VerificationRequest {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verificationType  String   // e.g. DIGILOCKER_AADHAAR, PAN, 7_12_EXTRACT
+  status            String   @default("PENDING") // PENDING, APPROVED, ACTION_REQUIRED, REJECTED, RESTRICTED
+  provider          String   @default("DEVELOPMENT_DEMO") // DEVELOPMENT_DEMO, DIGILOCKER_PROD
+  documentReference String?
+  submittedAt       DateTime @default(now())
+  reviewedAt        DateTime?
+  reviewedBy        String?
+  reviewNotes       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model SessionToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// ==========================================
+// PHASE 2 MARKETPLACE & TRADING ENGINE MODELS
+// ==========================================
+
+model Lot {
+  id                   String   @id @default(uuid())
+  farmerId             String
+  farmer               User     @relation("FarmerLots", fields: [farmerId], references: [id], onDelete: Cascade)
+  
+  // Minimal Essential Lot Information
+  cropName             String
+  variety              String?
+  quantityAvailable    Float    // in kg/quintal
+  unit                 String   @default("Quintal") // kg, Quintal, Tonne
+  askPricePerUnit      Float
+  expectedHarvestDate  DateTime
+  alreadyHarvested     Boolean  @default(false)
+  
+  // Advanced Quality & Produce Parameters (Optional / Progressive Disclosure)
+  grade                String?  // Grade A, Grade B, Grade C
+  sizeMm               Float?
+  maturityColour       String?
+  moisturePct          Float?
+  damagePct            Float?
+  freshness            String?  // Freshly Harvested, 1-2 Days, 3+ Days
+  packagingType        String?  // Crates, Gunny Bags, Loose, Corrugated Boxes
+  photoUrls            String?  // JSON string array of stored image URLs
+  
+  // Location & Privacy Model
+  publicVillage        String
+  publicTaluka         String
+  publicDistrict       String
+  latitude             Float?   // Exact GPS (Protected)
+  longitude            Float?   // Exact GPS (Protected)
+  farmAddress          String?  // Exact address (Protected)
+  
+  // Lifecycle Status
+  status               String   @default("PUBLISHED") 
+  // DRAFT, PUBLISHED, BOOKING_THRESHOLD_REACHED, FARMER_CONFIRMED, HARVEST_READY, HARVESTED, DISPATCHED, COMPLETED, CANCELLED
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  prebookings          HarvestPrebooking[]
+  bids                 OfferAndBid[]
+  cameraLogs           HarvestCameraLog[]
+  rfqMatches           RFQAndInquiry[]
+  savedListings        SavedListing[]
+  orders               Order[]
+  storageRequests      StorageRequest[]
+}
+
+model HarvestPrebooking {
+  id             String   @id @default(uuid())
+  lotId          String
+  lot            Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  buyerId        String
+  buyer          User     @relation("BuyerPrebookings", fields: [buyerId], references: [id], onDelete: Cascade)
+  
+  buyerType      String   @default("INDIVIDUAL") // INDIVIDUAL, SOCIETY, INSTITUTIONAL, TRADER
+  societyName    String?
+  quantityBooked Float
+  unitPrice      Float
+  totalAmount    Float
+  status         String   @default("PENDING_CONFIRMATION") // PENDING_CONFIRMATION, CONFIRMED, FULFILLED, CANCELLED
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model RFQAndInquiry {
+  id                   String    @id @default(uuid())
+  buyerId              String
+  buyer                User      @relation("BuyerRFQs", fields: [buyerId], references: [id], onDelete: Cascade)
+  matchedLotId         String?
+  matchedLot           Lot?      @relation(fields: [matchedLotId], references: [id], onDelete: SetNull)
+  
+  targetCrop           String
+  targetVariety        String?
+  requiredQuantity     Float
+  unit                 String    @default("Quintal")
+  targetGrade          String?
+  budgetPricePerUnit   Float
+  deliveryDistrict     String
+  deliveryAddress      String?
+  latitude             Float?
+  longitude            Float?
+  requiredByDate       DateTime
+  status               String    @default("OPEN") // OPEN, MATCHED, CLOSED, EXPIRED
+  
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model OfferAndBid {
+  id                  String   @id @default(uuid())
+  lotId               String
+  lot                 Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  bidderId            String
+  bidder              User     @relation("UserBids", fields: [bidderId], references: [id], onDelete: Cascade)
+  
+  bidderRole          String   // FARMER, BUYER
+  offeredPricePerUnit Float
+  quantity            Float
+  paymentTermsDays    Int      @default(0) // 0 = Instant Cash/UPI, 7 = 7 days credit
+  counterOfferId      String?  @unique
+  counterOffer        OfferAndBid? @relation("CounterOfferChain", fields: [counterOfferId], references: [id], onDelete: SetNull)
+  parentOffer         OfferAndBid? @relation("CounterOfferChain")
+  
+  status              String   @default("PENDING") // PENDING, COUNTERED, ACCEPTED, REJECTED, EXPIRED, WITHDRAWN
+  expiresAt           DateTime
+  idempotencyKey      String?  @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  order               Order?
+}
+
+model HarvestCameraLog {
+  id        String   @id @default(uuid())
+  lotId     String
+  lot       Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  stage     String   // HARVESTED, PACKED, DISPATCHED
+  photoUrl  String
+  latitude  Float?
+  longitude Float?
+  loggedAt  DateTime @default(now())
+}
+
+model FollowAndAlert {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation("UserFollower", fields: [userId], references: [id], onDelete: Cascade)
+  farmerId          String
+  farmer            User     @relation("FarmerFollowed", fields: [farmerId], references: [id], onDelete: Cascade)
+  notificationTypes String   // Comma-separated e.g. "FARM_UPDATES,LAST_HARVEST,NEW_LISTING"
+  createdAt         DateTime @default(now())
+}
+
+model MarketBenchmarkCache {
+  id          String   @id @default(uuid())
+  cropName    String
+  mandiName   String
+  district    String
+  minPrice    Float
+  maxPrice    Float
+  modalPrice  Float
+  trend       String   // UP, DOWN, STABLE
+  weatherInfo String?  // Weather condition string or JSON
+  source      String   @default("Agmarknet API (Development Sandbox)")
+  fetchedAt   DateTime @default(now())
+}
+
+model SavedListing {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lotId     String
+  lot       Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, lotId])
+}
+
+// ==========================================
+// PHASE 5 ORDER MANAGEMENT & WORKFLOW ENGINE
+// ==========================================
+
+model Order {
+  id                  String   @id @default(uuid())
+  orderNumber         String   @unique
+  acceptedOfferId     String   @unique
+  acceptedOffer       OfferAndBid @relation(fields: [acceptedOfferId], references: [id], onDelete: Restrict)
+  lotId               String
+  lot                 Lot      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  farmerId            String
+  farmer              User     @relation("FarmerOrders", fields: [farmerId], references: [id], onDelete: Restrict)
+  buyerId             String
+  buyer               User     @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  
+  // Historical Commercial Snapshot (Preserved independently of future edits)
+  cropName            String
+  variety             String?
+  quantity            Float
+  unit                String   @default("Quintal")
+  agreedPricePerUnit  Float
+  agreedTotalValue    Float    // quantity * agreedPricePerUnit
+  paymentTermsDays    Int      @default(0) // 0 = Instant Cash/UPI, N = N days credit
+  farmerName          String
+  farmerMobile        String
+  buyerName           String
+  buyerMobile         String
+  publicVillage       String
+  publicTaluka        String
+  publicDistrict      String
+  grade               String?
+  packagingType       String?
+
+  // State Machine Lifecycle
+  status              String   @default("ORDER_CREATED")
+  // ORDER_CREATED, CONFIRMED, PICKUP_PLANNED, READY_FOR_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERED, RECEIPT_PENDING, COMPLETED, CANCELLED
+
+  // Cancellation Data
+  cancelledAt         DateTime?
+  cancelledBy         String?  // farmerId or buyerId
+  cancellationReason  String?
+
+  // Fulfillment Details Foundation
+  pickupPlannedDate   DateTime?
+  pickupAddress       String?
+  deliveryAddress     String?
+  fulfillmentNotes    String?
+
+  idempotencyKey      String?  @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  timelineEvents      OrderTimelineEvent[]
+
+  // Phase 6 Transport & Storage Relations
+  transportRequests   TransportRequest[]
+  storageRequests     StorageRequest[]
+
+  // Phase 10 Trust & Reputation Relations
+  reviews             TransactionReview[]
+}
+
+model OrderTimelineEvent {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    String   // Target order status or event type
+  actorId   String
+  actorRole String   // FARMER, BUYER, SYSTEM
+  actorName String
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+// ==========================================
+// PHASE 6 TRANSPORTATION & STORAGE MODELS
+// ==========================================
+
+model ProviderProfile {
+  id                    String             @id @default(uuid())
+  userId                String             @unique
+  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName          String?
+  hasTransportServices  Boolean            @default(false)
+  hasStorageServices    Boolean            @default(false)
+  contactName           String
+  contactMobile         String
+  state                 String
+  district              String
+  taluka                String?
+  village               String?
+  latitude              Float?
+  longitude             Float?
+  verificationStatus    String             @default("PROFILE_PENDING") // MOBILE_VERIFIED, PROFILE_PENDING, PROFILE_VERIFIED, REJECTED
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  vehicles              TransportVehicle[]
+  facilities            StorageFacility[]
+  transportRequests     TransportRequest[] @relation("ProviderTransportRequests")
+  reviewsReceived       TransactionReview[] @relation("ProviderReviewsReceived")
+  reportsAgainst         Report[]           @relation("ReportsAgainstProvider")
+}
+
+model TransportVehicle {
+  id                    String           @id @default(uuid())
+  providerId            String
+  provider              ProviderProfile  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  vehicleType           String           // PICKUP_TRUCK, MINI_TRUCK, HEAVY_TRUCK, TRACTOR_TRAILER, COLD_REFRIGERATED_TRUCK
+  vehicleNumber         String
+  capacity              Float
+  capacityUnit          String           @default("Quintal") // Quintal, Tonne
+  supportedCrops        String           // Comma-separated or JSON string
+  serviceAreaDistricts  String           // Comma-separated or JSON string
+  pricingMethod         String           @default("NEGOTIABLE") // PER_KM, PER_TRIP, NEGOTIABLE
+  ratePerKm             Decimal?
+  ratePerTrip           Decimal?
+  isAvailable           Boolean          @default(true)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  requests              TransportRequest[]
+}
+
+model StorageFacility {
+  id                    String           @id @default(uuid())
+  providerId            String
+  provider              ProviderProfile  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  facilityName          String
+  facilityType          String           // COLD_STORAGE, WAREHOUSE, GODOWN, CONTROLLED_ATMOSPHERE
+  totalCapacity         Float
+  capacityUnit          String           @default("Quintal") // Quintal, Tonne
+  supportedCrops        String           // Comma-separated or JSON string
+  pricePerUnitPerDay    Decimal
+  state                 String
+  district              String
+  taluka                String?
+  village               String?
+  latitude              Float?
+  longitude             Float?
+  address               String?          // Protected exact address
+  isAvailable           Boolean          @default(true)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  requests              StorageRequest[]
+}
+
+model TransportRequest {
+  id                    String           @id @default(uuid())
+  orderId               String?
+  order                 Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  arrangementType       String           @default("KRISHISETU_PROVIDER") // FARMER_ARRANGED, BUYER_ARRANGED, KRISHISETU_PROVIDER
+  requesterId           String
+  requester             User             @relation("UserTransportRequests", fields: [requesterId], references: [id], onDelete: Cascade)
+  providerId            String?
+  provider              ProviderProfile? @relation("ProviderTransportRequests", fields: [providerId], references: [id], onDelete: SetNull)
+  vehicleId             String?
+  vehicle               TransportVehicle?@relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  
+  // Driver Contact Information (Provider ≠ Driver)
+  driverName            String?
+  driverMobile          String?
+  
+  // Pickup & Delivery Locations
+  pickupVillage         String
+  pickupTaluka          String
+  pickupDistrict        String
+  pickupAddress         String?          // Protected
+  pickupLatitude        Float?
+  pickupLongitude       Float?
+  deliveryVillage       String
+  deliveryTaluka        String
+  deliveryDistrict      String
+  deliveryAddress       String?          // Protected
+  deliveryLatitude      Float?
+  deliveryLongitude     Float?
+
+  cropCategory          String
+  quantity              Float
+  unit                  String           @default("Quintal")
+  scheduledPickupDate   DateTime
+  estimatedDistanceKm   Float?
+  pricingType           String           @default("NEGOTIABLE") // NEGOTIABLE, CONFIGURED_RATE, PROVIDER_QUOTE
+  agreedTransportCost   Decimal?
+  paymentResponsibility String           @default("NOT_SPECIFIED") // FARMER, BUYER, NOT_SPECIFIED
+  paymentStatus         String           @default("PAYMENT_NOT_INTEGRATED") // PAYMENT_NOT_INTEGRATED, MANUAL_PAYMENT_PENDING
+
+  status                String           @default("REQUESTED")
+  // REQUESTED, ACCEPTED, ASSIGNED, PICKUP_PLANNED, READY_FOR_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERED, COMPLETED, CANCELLED
+
+  cancelledAt           DateTime?
+  cancelledBy           String?
+  cancellationReason    String?
+  idempotencyKey        String?          @unique
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  timelineEvents        TransportTimelineEvent[]
+}
+
+model TransportTimelineEvent {
+  id                    String           @id @default(uuid())
+  requestId             String
+  request               TransportRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  status                String
+  actorId               String
+  actorRole             String
+  actorName             String
+  notes                 String?
+  createdAt             DateTime         @default(now())
+}
+
+model StorageRequest {
+  id                    String           @id @default(uuid())
+  orderId               String?
+  order                 Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  lotId                 String?
+  lot                   Lot?             @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  requesterId           String
+  requester             User             @relation("UserStorageRequests", fields: [requesterId], references: [id], onDelete: Cascade)
+  facilityId            String
+  facility              StorageFacility  @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+
+  cropName              String
+  quantity              Float
+  unit                  String           @default("Quintal")
+  normalizedQuantity    Float            // Quantity in facility's canonical capacityUnit
+  expectedCheckInDate   DateTime
+  durationDays          Int
+  agreedStorageCost     Decimal
+  paymentStatus         String           @default("PAYMENT_NOT_INTEGRATED")
+
+  status                String           @default("REQUESTED")
+  // REQUESTED, ACCEPTED, RESERVED, CHECK_IN_PENDING, STORED, RELEASE_REQUESTED, RELEASED, COMPLETED, CANCELLED
+
+  cancelledAt           DateTime?
+  cancelledBy           String?
+  cancellationReason    String?
+  idempotencyKey        String?          @unique
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  timelineEvents        StorageTimelineEvent[]
+}
+
+model StorageTimelineEvent {
+  id                    String           @id @default(uuid())
+  requestId             String
+  request               StorageRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  status                String
+  actorId               String
+  actorRole             String
+  actorName             String
+  notes                 String?
+  createdAt             DateTime         @default(now())
+}
+
+// ==========================================
+// PHASE 8 MARKET INTELLIGENCE & WEATHER MODELS
+// ==========================================
+
+model MarketPriceRecord {
+  id               String   @id @default(uuid())
+  cropName         String
+  variety          String?
+  mandiName        String
+  district         String
+  state            String   @default("Maharashtra")
+  marketDate       DateTime
+  minPrice         Decimal
+  maxPrice         Decimal
+  modalPrice       Decimal
+  arrivalsQuantity Float    @default(0)
+  unit             String   @default("Quintal")
+  source           String   @default("Agmarknet Sandbox / Demo Data")
+  isDemoData       Boolean  @default(true)
+  createdAt        DateTime @default(now())
+}
+
+model WeatherObservationRecord {
+  id           String   @id @default(uuid())
+  state        String
+  district     String
+  taluka       String?
+  temperatureC Float
+  condition    String   // Sunny, Rainy, Cloudy, Thunderstorm, Foggy
+  humidityPct  Float?
+  rainfallMm   Float?
+  windSpeedKmh Float?
+  source       String   @default("IMD Sandbox / Demo Data")
+  isDemoData   Boolean  @default(true)
+  observedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+}
+
+// ==========================================
+// PHASE 9 NOTIFICATION & ALERT ENGINE MODELS
+// ==========================================
+
+model Notification {
+  id               String    @id @default(uuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type             String    // e.g. OFFER_RECEIVED, ORDER_STATUS_CHANGED, TRANSPORT_ACCEPTED, WEATHER_ALERT
+  category         String    // OFFER, ORDER, TRANSPORT, STORAGE, MARKET, WEATHER, LISTING, REMINDER, SYSTEM
+  priority         String    @default("NORMAL") // LOW, NORMAL, HIGH, URGENT
+  
+  titleKey         String    // Translation key e.g. "notifications.offerReceivedTitle"
+  messageKey       String    // Translation key e.g. "notifications.offerReceivedMsg"
+  payloadJson      String?   // JSON payload string with variables (cropName, amount, etc.)
+  
+  deepLink         String?   // Target URL e.g. "/offers", "/orders/ks-123"
+  sourceEntityType String?   // OFFER, ORDER, TRANSPORT_REQUEST, STORAGE_REQUEST, MARKET_PRICE, WEATHER_OBSERVATION
+  sourceEntityId   String?
+  idempotencyKey   String?   @unique
+  
+  isRequired       Boolean   @default(false) // Required transactional vs optional alert
+  readAt           DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, category])
+  @@index([createdAt])
+}
+
+model NotificationPreference {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  enableInApp     Boolean  @default(true)
+  enableOffers    Boolean  @default(true)
+  enableOrders    Boolean  @default(true)
+  enableTransport Boolean  @default(true)
+  enableStorage   Boolean  @default(true)
+  enableMarket    Boolean  @default(true)
+  enableWeather   Boolean  @default(true)
+  enableReminders Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model MarketAlertConfig {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  cropName    String
+  district    String
+  targetPrice Float
+  condition   String   // ABOVE, BELOW
+  isActive    Boolean  @default(true)
+  isDemoData  Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, isActive])
+  @@index([cropName, district])
+}
+
+// ==========================================
+// PHASE 10 TRUST, REPUTATION & SAFETY MODELS
+// ==========================================
+
+model TransactionReview {
+  id                 String           @id @default(uuid())
+  orderId            String
+  order              Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reviewerId         String
+  reviewer           User             @relation("ReviewsGiven", fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewedUserId     String
+  reviewedUser       User             @relation("ReviewsReceived", fields: [reviewedUserId], references: [id], onDelete: Cascade)
+  reviewedProviderId String?
+  reviewedProvider   ProviderProfile? @relation("ProviderReviewsReceived", fields: [reviewedProviderId], references: [id], onDelete: SetNull)
+  
+  rating             Int              // 1 to 5
+  comment            String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  deletedAt          DateTime?
+
+  @@unique([reviewerId, orderId, reviewedUserId])
+  @@index([reviewedUserId])
+  @@index([reviewedProviderId])
+}
+
+model Report {
+  id                 String           @id @default(uuid())
+  reporterId         String
+  reporter           User             @relation("ReportsFiled", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUserId     String?
+  reportedUser       User?            @relation("ReportsAgainstUser", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  reportedProviderId String?
+  reportedProvider   ProviderProfile? @relation("ReportsAgainstProvider", fields: [reportedProviderId], references: [id], onDelete: SetNull)
+  
+  orderId            String?
+  offerId            String?
+  lotId              String?
+  category           String           // NON_PAYMENT, NON_DELIVERY, QUALITY_MISMATCH, FRAUD, UNPROFESSIONAL_BEHAVIOR, HARASSMENT, OTHER
+  description        String
+  status             String           @default("OPEN") // OPEN, UNDER_REVIEW, RESOLVED, DISMISSED
+  
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  resolvedAt         DateTime?
+
+  moderationNotes    ModerationNote[]
+
+  @@index([reporterId])
+  @@index([reportedUserId])
+  @@index([status])
+}
+
+model ModerationNote {
+  id         String   @id @default(uuid())
+  reportId   String
+  report     Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  reviewerId String
+  reviewer   User     @relation("ModerationNotesCreated", fields: [reviewerId], references: [id], onDelete: Cascade)
+  note       String
+  createdAt  DateTime @default(now())
+
+  @@index([reportId])
+}
+
+
+
